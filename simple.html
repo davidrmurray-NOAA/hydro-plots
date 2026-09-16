@@ -37,17 +37,16 @@
     <div id="charts-wrapper"></div>
 
     <script>
-        // 1. ADD YOUR SITE NUMBERS HERE
-        const siteNumbers = [          
-            '01413500',  // Margaretville
-            '01415000',
-            '01414500',
-            '01413408',
-            '01414000',
-            '01413398',
-            '01413088'
-          
-        ]; 
+       // 1. DYNAMICALLY LOAD SITES FROM THE URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const sitesParam = urlParams.get('sites');
+        
+        let siteNumbers = [];
+        
+        if (sitesParam) {
+            // If the URL contains "?sites=...", split the numbers by comma
+            siteNumbers = sitesParam.split(',');
+        } 
 
         async function fetchAllSites() {
             const wrapper = document.getElementById('charts-wrapper');
