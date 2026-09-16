@@ -43,13 +43,19 @@
         
         let siteNumbers = [];
         
-        if (sitesParam) {
-            // If the URL contains "?sites=...", split the numbers by comma
-            siteNumbers = sitesParam.split(',');
-        } 
+      if (sitesParam) {
+          siteNumbers = sitesParam.split(',');
+      } else {
+          document.getElementById('charts-wrapper').innerHTML = '<p>No sites provided</p>';
+      }
 
-        async function fetchAllSites() {
-            const wrapper = document.getElementById('charts-wrapper');
+       async function fetchAllSites() {
+          const wrapper = document.getElementById('charts-wrapper');
+
+          if (!sitesParam || siteNumbers.length === 0) {
+            wrapper.innerHTML = '<p>No sites provided</p>';
+            return;
+          }
 
             for (const siteNo of siteNumbers) {
                 try {
