@@ -66,16 +66,21 @@
                     // Format as an OGC API datetime range (start/..)
                    const datetimeParam = `${end.toISOString()}/..`;
 
-                   // const datetimeParam = "P7D"
-                    // Construct the new URL
-                   // const ivUrl = 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?monitoring_location_id=USGS-' + siteNo + '&parameter_code=00060&time=' + datetimeParam + '&f=json';
                     const ivUrl = 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?limit=700&f=json&lang=en-US&skipGeometry=false&offset=0&datetime=' + datetimeParam + '&monitoring_location_id=USGS-' + siteNo + '&parameter_code=00060';
                     const response = await fetch(ivUrl);
                     const data = await response.json();
 
-                   // The OGC API doesn't include the site name in the time-series payload, so we provide a fallback
-                    const dynamicSiteName = 'Monitoring Location: ' + siteNo;
                     const timeSeries = data.features;
+
+                    //Fetch the site metadata to get the official monitoring location name
+                    const metaUrl = `https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?monitoring_location_number=${siteNo}&f=json`;
+                    const metaResponse = await fetch(metaUrl);
+                    const metaData = await metaResponse.json();
+
+                    let dynamicSiteName = 'Monitoring Location: ' + siteNo;
+                    if (metaData.features && metaData.features.length > 0) {
+                        dynamicSiteName = metaData.features[0].properties.monitoring_location_name;
+                    }
 
                     // Optional: The new API might return data in descending order (newest first).
                     // Chart.js prefers chronological order, so you may need to reverse it:
