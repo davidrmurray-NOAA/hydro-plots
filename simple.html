@@ -54,39 +54,54 @@
 
           if (!sitesParam || siteNumbers.length === 0) {
             wrapper.innerHTML = '<p>No sites provided</p>';
+           // siteNumbers = ['02016000'] //default site for testing
             return;
           }
 
             for (const siteNo of siteNumbers) {
                 try {
-                    const ivUrl = 'https://' + 'waterservices.usgs.gov' + '/nwis/iv/?format=json&sites=' + siteNo + '&period=P7D&parameterCd=00060&siteStatus=all';
-                    
+
+                    const end = new Date();
+                    end.setDate(end.getDate() - 5);
+                    // Format as an OGC API datetime range (start/..)
+                   const datetimeParam = `${end.toISOString()}/..`;
+
+                   // const datetimeParam = "P7D"
+                    // Construct the new URL
+                   // const ivUrl = 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?monitoring_location_id=USGS-' + siteNo + '&parameter_code=00060&time=' + datetimeParam + '&f=json';
+                    const ivUrl = 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?limit=700&f=json&lang=en-US&skipGeometry=false&offset=0&datetime=' + datetimeParam + '&monitoring_location_id=USGS-' + siteNo + '&parameter_code=00060';
                     const response = await fetch(ivUrl);
                     const data = await response.json();
 
-                    const dynamicSiteName = data.value.timeSeries[0].sourceInfo.siteName;
-                    const timeSeries = data.value.timeSeries[0].values[0].value;
-                 const continuousData = [];
+                   // The OGC API doesn't include the site name in the time-series payload, so we provide a fallback
+                    const dynamicSiteName = 'Monitoring Location: ' + siteNo;
+                    const timeSeries = data.features;
+
+                    // Optional: The new API might return data in descending order (newest first).
+                    // Chart.js prefers chronological order, so you may need to reverse it:
+                    timeSeries.reverse();
+                    const continuousData = [];
+
                     for (let i = 0; i < timeSeries.length; i++) {
                         const currentItem = timeSeries[i];
-                        const currentTime = new Date(currentItem.dateTime);
-                        const currentValue = parseFloat(currentItem.value);
+                        const currentTime = new Date(currentItem.properties.time);
+                        const currentValue = parseFloat(currentItem.properties.value);
 
                         if (i > 0) {
-                            const previousTime = new Date(timeSeries[i - 1].dateTime);
+                            const previousTime = new Date(timeSeries[i - 1].properties.time);
                             // Calculate difference in minutes
                             const timeDiffMinutes = (currentTime - previousTime) / (1000 * 60);
-                            
+
                             // If the gap is greater than 60 minutes, data is missing
                             if (timeDiffMinutes > 60) {
                                 // Insert a null point right after the last good reading to break the line
                                 continuousData.push({
-                                    x: new Date(previousTime.getTime() + (1000 * 60)), 
+                                    x: new Date(previousTime.getTime() + (1000 * 60)),
                                     y: null
                                 });
                             }
                         }
-                        
+
                         continuousData.push({
                             x: currentTime,
                             y: currentValue
@@ -105,7 +120,7 @@
                     console.error("Error fetching USGS data for site " + siteNo + ":", error);
                     const errorMsg = document.createElement('p');
                     errorMsg.style.color = 'red';
-                    errorMsg.textContent = "Error loading river data for site " + siteNo;
+                    errorMsg.textContent = "Error loading river data for site " + siteNo + " - Details: " + error.message;
                     wrapper.appendChild(errorMsg);
                 }
             }
