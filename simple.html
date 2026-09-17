@@ -54,11 +54,15 @@
 
           if (!sitesParam || siteNumbers.length === 0) {
             wrapper.innerHTML = '<p>No sites provided</p>';
-           // siteNumbers = ['02016000'] //default site for testing
-            return;
+            siteNumbers = ['01422747'] //default site for testing
+           // return;
           }
 
             for (const siteNo of siteNumbers) {
+
+
+                /*
+                //This is using the new api but it currently does not work for all usgs gage sites for some reason - will have to revisit in
                 try {
 
                     const end = new Date();
@@ -84,7 +88,7 @@
 
                     // Optional: The new API might return data in descending order (newest first).
                     // Chart.js prefers chronological order, so you may need to reverse it:
-                    timeSeries.reverse();
+                   // timeSeries.reverse();
                     const continuousData = [];
 
                     for (let i = 0; i < timeSeries.length; i++) {
@@ -111,6 +115,39 @@
                             x: currentTime,
                             y: currentValue
                         });
+                    } */
+                try {
+                    // 1. Fetch data using the reliable NWIS JSON API instead of OGC API
+                    const ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060`;
+                    const response = await fetch(ivUrl);
+                    const data = await response.json();
+
+                    // 2. Guard against missing data to prevent crashes
+                    if (!data.value || !data.value.timeSeries || data.value.timeSeries.length === 0) {
+                        throw new Error("Data not available for this site.");
+                    }
+
+                    const timeSeriesData = data.value.timeSeries[0];
+                    const dynamicSiteName = timeSeriesData.sourceInfo.siteName;
+                    const timeSeries = timeSeriesData.values[0].value;
+
+                    // 3. Parse the time series
+                    const continuousData = [];
+                    for (let i = 0; i < timeSeries.length; i++) {
+                        const currentItem = timeSeries[i];
+                        // Note: NWIS uses .dateTime and .value instead of .properties
+                        const currentTime = new Date(currentItem.dateTime);
+                        const currentValue = parseFloat(currentItem.value);
+
+                        if (i > 0) {
+                            const previousTime = new Date(timeSeries[i - 1].dateTime);
+                            const timeDiffMinutes = (currentTime - previousTime) / (1000 * 60);
+
+                            if (timeDiffMinutes > 60) {
+                                continuousData.push({ x: new Date(previousTime.getTime() + (1000 * 60)), y: null });
+                            }
+                        }
+                        continuousData.push({ x: currentTime, y: currentValue });
                     }
 
                     const chartDiv = document.createElement('div');
