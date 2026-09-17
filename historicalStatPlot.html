@@ -21,13 +21,7 @@
          * This code was developed with the help of Gemini (Google AI).
          * Custom USGS Statistical Hydrograph for Google Sites.
          */
-        // --- YOUR CONFIGURATION ---
-        const SITE_CODE = '01380450'; 
-        const PARAM_CODE = '00060';   
-        
-        // PASTE YOUR PUBLISHED GOOGLE SHEET CSV LINK HERE:
-        const GOOGLE_SHEET_CSV_URL = 'https://gist.githubusercontent.com/davermurray/9e446ff04fd3a795f72495261dfc5273/raw/7d0001b35216304a23e68034117fe099a3e74a29/usgs_eop_stats.csv'; 
-        
+
         // Helper function to prevent `0` from crashing the Logarithmic scale
         function safeFloat(val) {
             let parsed = parseFloat(val);
@@ -37,17 +31,67 @@
         }
 
         async function buildUSGSChart() {
-            try {
-                const currentYear = new Date().getFullYear();
-                const dvUrl = `https://waterservices.usgs.gov/nwis/dv/?format=json&sites=${SITE_CODE}&parameterCd=${PARAM_CODE}&statCd=00003&startDT=${currentYear}-01-01`;
+          try {
+            // --- 0. Get Dynamic Configuration ---
+            const urlParams = new URLSearchParams(window.location.search);
+            const nwslid = urlParams.get('nwslid');
 
-                const [sheetRes, dvRes] = await Promise.all([
-                    fetch(GOOGLE_SHEET_CSV_URL),
-                    fetch(dvUrl)
-                ]);
+            if (!nwslid) {
+              throw new Error("Missing 'nwslid' parameter in URL. Example: ?nwslid=XYZ");
+            }
 
-                const csvText = await sheetRes.text();
-                const dvJson = await dvRes.json();
+            // Fetch the mapping CSV
+            const mappingRes = await fetch('stats/nwsid_usgs_fgroup.csv');
+            if (!mappingRes.ok) throw new Error("Could not fetch stats/nwsid_usgs_fgroup.csv");
+            const mappingText = await mappingRes.text();
+
+            // Parse mapping CSV to find USGS id and fgroup
+            const mappingLines = mappingText.split('\n').filter(l => l.trim().length > 0);
+            const mapHeaders = mappingLines[0].split(',').map(h => h.trim().toLowerCase());
+
+            // Account for potential column naming variations
+            const nwsidIdx = mapHeaders.findIndex(h => h.includes('nwsid') || h.includes('nwslid'));
+            const usgsIdx = mapHeaders.findIndex(h => h.includes('usgs'));
+            const fgroupIdx = mapHeaders.findIndex(h => h.includes('fgroup'));
+
+            if (nwsidIdx === -1 || usgsIdx === -1 || fgroupIdx === -1) {
+              throw new Error("Mapping CSV is missing required columns (nwsid, usgs, fgroup).");
+            }
+
+            let SITE_CODE = null;
+            let fgroup = null;
+
+            // Loop through the mapping to find the matching NWSLID
+            for (let i = 1; i < mappingLines.length; i++) {
+              const cols = mappingLines[i].split(',').map(c => c.trim());
+              if (cols[nwsidIdx].toUpperCase() === nwslid.toUpperCase()) {
+                SITE_CODE = cols[usgsIdx];
+                fgroup = cols[fgroupIdx];
+                break;
+              }
+            }
+
+            if (!SITE_CODE || !fgroup) {
+              throw new Error(`No mapping found for NWSLID: ${nwslid}`);
+            }
+
+            const PARAM_CODE = '00060'; // Assuming this stays constant for discharge
+            const statsCsvUrl = `stats/${fgroup}_stats.csv`;
+
+            const currentYear = new Date().getFullYear();
+            const dvUrl = `https://waterservices.usgs.gov/nwis/dv/?format=json&sites=${SITE_CODE}&parameterCd=${PARAM_CODE}&statCd=00003&startDT=${currentYear}-01-01`;
+
+            // Fetch both the dynamic fgroup stats file and the USGS daily values
+            const [sheetRes, dvRes] = await Promise.all([
+              fetch(statsCsvUrl),
+              fetch(dvUrl)
+            ]);
+
+            const csvText = await sheetRes.text();
+            const dvJson = await dvRes.json();
+
+    // --- 1. Process Google Sheet Data (Now Fgroup Stats Data) ---
+    // (Keep the rest of your existing code from here downwards)
                 
                 // --- 1. Process Google Sheet Data ---
                 const lines = csvText.split('\n').filter(l => l.trim().length > 0);
