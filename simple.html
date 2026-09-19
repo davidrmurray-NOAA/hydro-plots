@@ -55,76 +55,39 @@
           if (!sitesParam || siteNumbers.length === 0) {
             wrapper.innerHTML = '<p>No sites provided</p>';
             siteNumbers = ['01422747'] //default site for testing
-           // return;
           }
 
             for (const siteNo of siteNumbers) {
-
-
-                /*
-                //This is using the new api but it currently does not work for all usgs gage sites for some reason - will have to revisit in
                 try {
+                    let isDischarge = true;
 
-                    const end = new Date();
-                    end.setDate(end.getDate() - 5);
-                    // Format as an OGC API datetime range (start/..)
-                   const datetimeParam = `${end.toISOString()}/..`;
+                    // Helper function to check if the payload actually contains data points
+                    const hasDataPoints = (apiData) => {
+                        return apiData.value &&
+                               apiData.value.timeSeries &&
+                               apiData.value.timeSeries.length > 0 &&
+                               apiData.value.timeSeries[0].values &&
+                               apiData.value.timeSeries[0].values.length > 0 &&
+                               apiData.value.timeSeries[0].values[0].value &&
+                               apiData.value.timeSeries[0].values[0].value.length > 0;
+                    };
 
-                    const ivUrl = 'https://api.waterdata.usgs.gov/ogcapi/v1/collections/continuous/items?limit=700&f=json&lang=en-US&skipGeometry=false&offset=0&datetime=' + datetimeParam + '&monitoring_location_id=USGS-' + siteNo + '&parameter_code=00060';
-                    const response = await fetch(ivUrl);
-                    const data = await response.json();
+                    // 1. Fetch data using the reliable NWIS JSON API for Discharge (00060)
+                    let ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060`;
+                    let response = await fetch(ivUrl);
+                    let data = await response.json();
 
-                    const timeSeries = data.features;
+                    // 2. Guard against missing discharge data points and fallback to Stage (00065)
+                    if (!hasDataPoints(data)) {
+                        isDischarge = false;
+                        ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00065`;
+                        response = await fetch(ivUrl);
+                        data = await response.json();
 
-                    //Fetch the site metadata to get the official monitoring location name
-                    const metaUrl = `https://api.waterdata.usgs.gov/ogcapi/v1/collections/monitoring-locations/items?monitoring_location_number=${siteNo}&f=json`;
-                    const metaResponse = await fetch(metaUrl);
-                    const metaData = await metaResponse.json();
-
-                    let dynamicSiteName = 'Monitoring Location: ' + siteNo;
-                    if (metaData.features && metaData.features.length > 0) {
-                        dynamicSiteName = metaData.features[0].properties.monitoring_location_name;
-                    }
-
-                    // Optional: The new API might return data in descending order (newest first).
-                    // Chart.js prefers chronological order, so you may need to reverse it:
-                   // timeSeries.reverse();
-                    const continuousData = [];
-
-                    for (let i = 0; i < timeSeries.length; i++) {
-                        const currentItem = timeSeries[i];
-                        const currentTime = new Date(currentItem.properties.time);
-                        const currentValue = parseFloat(currentItem.properties.value);
-
-                        if (i > 0) {
-                            const previousTime = new Date(timeSeries[i - 1].properties.time);
-                            // Calculate difference in minutes
-                            const timeDiffMinutes = (currentTime - previousTime) / (1000 * 60);
-
-                            // If the gap is greater than 60 minutes, data is missing
-                            if (timeDiffMinutes > 60) {
-                                // Insert a null point right after the last good reading to break the line
-                                continuousData.push({
-                                    x: new Date(previousTime.getTime() + (1000 * 60)),
-                                    y: null
-                                });
-                            }
+                        // If stage is also missing data points, throw error
+                        if (!hasDataPoints(data)) {
+                            throw new Error("Neither discharge nor stage data available for this site.");
                         }
-
-                        continuousData.push({
-                            x: currentTime,
-                            y: currentValue
-                        });
-                    } */
-                try {
-                    // 1. Fetch data using the reliable NWIS JSON API instead of OGC API
-                    const ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060`;
-                    const response = await fetch(ivUrl);
-                    const data = await response.json();
-
-                    // 2. Guard against missing data to prevent crashes
-                    if (!data.value || !data.value.timeSeries || data.value.timeSeries.length === 0) {
-                        throw new Error("Data not available for this site.");
                     }
 
                     const timeSeriesData = data.value.timeSeries[0];
@@ -135,7 +98,6 @@
                     const continuousData = [];
                     for (let i = 0; i < timeSeries.length; i++) {
                         const currentItem = timeSeries[i];
-                        // Note: NWIS uses .dateTime and .value instead of .properties
                         const currentTime = new Date(currentItem.dateTime);
                         const currentValue = parseFloat(currentItem.value);
 
@@ -156,7 +118,7 @@
                     chartDiv.appendChild(canvas);
                     wrapper.appendChild(chartDiv);
 
-                    renderChart(canvas, continuousData, dynamicSiteName, siteNo);
+                    renderChart(canvas, continuousData, dynamicSiteName, siteNo, isDischarge);
 
                 } catch (error) {
                     console.error("Error fetching USGS data for site " + siteNo + ":", error);
@@ -168,22 +130,28 @@
             }
         }
 
-        function renderChart(canvasElement, continuousData, dynamicSiteName, siteNo) {
+        function renderChart(canvasElement, continuousData, dynamicSiteName, siteNo, isDischarge) {
             const ctx = canvasElement.getContext('2d');
-            
+
+            // Set dynamic properties based on the parameter fetched
+            const dataLabel = isDischarge ? 'Discharge' : 'Gage Height';
+            const unit = isDischarge ? 'cfs' : 'ft';
+            const yAxisType = isDischarge ? 'logarithmic' : 'linear';
+            const yAxisTitle = isDischarge ? 'Discharge (ft³/s) [Log Scale]' : 'Gage Height (ft) [Linear Scale]';
+            const lineColor = isDischarge ? 'rgba(0, 51, 153, 1)' : 'rgba(0, 153, 102, 1)'; // Blue for discharge, Green for stage
+
             new Chart(ctx, {
                 type: 'line',
                 data: {
                     datasets: [{
-                        label: 'Discharge',
+                        label: dataLabel,
                         data: continuousData,
-                        borderColor: 'rgba(0, 51, 153, 1)', 
+                        borderColor: lineColor,
                         borderWidth: 2,
-                        pointRadius: 0, 
+                        pointRadius: 0,
                         tension: 0.1,
                         fill: false,
                         spanGaps: false
-
                     }]
                 },
                 options: {
@@ -205,17 +173,17 @@
                             title: { display: true, text: 'Date' }
                         },
                         y: {
-                            type: 'logarithmic',
-                            title: { display: true, text: 'Discharge (ft³/s) [Log Scale]' }
+                            type: yAxisType,
+                            title: { display: true, text: yAxisTitle }
                         }
                     },
                     plugins: {
                         legend: { display: false, position: 'top' },
-                        title: { 
-                            display: true, 
+                        title: {
+                            display: true,
                             text: [
                                 dynamicSiteName,
-                                'USGS No: ' + siteNo
+                                'USGS No: ' + siteNo + ` (${dataLabel})`
                             ]
                         },
                         // Custom Tooltip Configuration
@@ -223,8 +191,8 @@
                             displayColors: false, // Hides the little color box in the tooltip
                             callbacks: {
                                 label: function(context) {
-                                    // Formats the hover text to show "X cfs"
-                                    return `Discharge: ${context.parsed.y} cfs`;
+                                    // Formats the hover text dynamically based on the active metric
+                                    return `${dataLabel}: ${context.parsed.y} ${unit}`;
                                 }
                             }
                         }
