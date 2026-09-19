@@ -6,20 +6,26 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; }
-        .chart-container { position: relative; width: 100%; max-width: 900px; margin: auto; }
+        .chart-container { position: relative; width: 100%; max-width: 900px; margin: auto; margin-bottom: 40px; }
         #loading { text-align: center; color: #666; font-size: 16px; margin-top: 50px; }
     </style>
 </head>
 <body>
+    <div id="loading">Fetching data...</div>
+
+    <!-- Daily Stats Chart -->
     <div class="chart-container">
-        <div id="loading">Fetching data...</div>
         <canvas id="usgsChart" style="display: none;"></canvas>
+    </div>
+
+    <!-- Cumulative Stats Chart -->
+    <div class="chart-container">
+        <canvas id="usgsCumulativeChart" style="display: none;"></canvas>
     </div>
 
 <script>
 /**
-         * This code was developed with the help of Gemini (Google AI).
-         * Custom USGS Statistical Hydrograph for Google Sites.
+         * Custom USGS Statistical Hydrograph & Cumulative Plot for Google Sites.
          */
 
         // Helper function to prevent `0` from crashing the Logarithmic scale
@@ -30,7 +36,15 @@
             return parsed;
         }
 
-        async function buildUSGSChart() {
+        // Helper function for scientific notation on Y-axis
+        function formatYAxis(value) {
+            if (value >= 100000) {
+                return value.toExponential(1); // e.g. 2.0e+8
+            }
+            return value;
+        }
+
+        async function buildUSGSCharts() {
           try {
             // --- 0. Get Dynamic Configuration ---
             const urlParams = new URLSearchParams(window.location.search);
@@ -49,7 +63,6 @@
             const mappingLines = mappingText.split('\n').filter(l => l.trim().length > 0);
             const mapHeaders = mappingLines[0].split(',').map(h => h.trim().toLowerCase());
 
-            // Account for potential column naming variations
             const nwsidIdx = mapHeaders.findIndex(h => h.includes('nwsid') || h.includes('nwslid'));
             const usgsIdx = mapHeaders.findIndex(h => h.includes('usgs'));
             const fgroupIdx = mapHeaders.findIndex(h => h.includes('fgroup'));
@@ -61,7 +74,6 @@
             let SITE_CODE = null;
             let fgroup = null;
 
-            // Loop through the mapping to find the matching NWSLID
             for (let i = 1; i < mappingLines.length; i++) {
               const cols = mappingLines[i].split(',').map(c => c.trim());
               if (cols[nwsidIdx].toUpperCase() === nwslid.toUpperCase()) {
@@ -75,13 +87,11 @@
               throw new Error(`No mapping found for NWSLID: ${nwslid}`);
             }
 
-            const PARAM_CODE = '00060'; // Assuming this stays constant for discharge
+            const PARAM_CODE = '00060';
             const statsCsvUrl = `stats/${fgroup}_stats.csv`;
-
             const currentYear = new Date().getFullYear();
             const dvUrl = `https://waterservices.usgs.gov/nwis/dv/?format=json&sites=${SITE_CODE}&parameterCd=${PARAM_CODE}&statCd=00003&startDT=${currentYear}-01-01`;
 
-            // Fetch both the dynamic fgroup stats file and the USGS daily values
             const [sheetRes, dvRes] = await Promise.all([
               fetch(statsCsvUrl),
               fetch(dvUrl)
@@ -90,155 +100,207 @@
             const csvText = await sheetRes.text();
             const dvJson = await dvRes.json();
 
-    // --- 1. Process Google Sheet Data (Now Fgroup Stats Data) ---
-    // (Keep the rest of your existing code from here downwards)
-                
-                // --- 1. Process Google Sheet Data ---
-                const lines = csvText.split('\n').filter(l => l.trim().length > 0);
-                
-                const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-                const siteIdx = headers.findIndex(h => h.includes('sitecode'));
-                const dateIdx = headers.findIndex(h => h.includes('monthday'));
-                
-                const p05Idx = headers.findIndex(h => h.includes('p05'));
-                const p10Idx = headers.findIndex(h => h.includes('p10'));
-                const p25Idx = headers.findIndex(h => h.includes('p25'));
-                const p50Idx = headers.findIndex(h => h.includes('p50'));
-                const p75Idx = headers.findIndex(h => h.includes('p75'));
-                const p90Idx = headers.findIndex(h => h.includes('p90'));
-                const p95Idx = headers.findIndex(h => h.includes('p95'));
-                
-                if (siteIdx === -1 || dateIdx === -1) {
-                    throw new Error("Could not find 'SiteCode' or 'MonthDay' columns in your CSV.");
+            // --- 1. Process Stats CSV Data ---
+            const lines = csvText.split('\n').filter(l => l.trim().length > 0);
+            const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+            const siteIdx = headers.findIndex(h => h.includes('sitecode'));
+            const dateIdx = headers.findIndex(h => h.includes('monthday'));
+
+            const p05Idx = headers.findIndex(h => h.includes('p05'));
+            const p10Idx = headers.findIndex(h => h.includes('p10'));
+            const p25Idx = headers.findIndex(h => h.includes('p25'));
+            const p50Idx = headers.findIndex(h => h.includes('p50'));
+            const p75Idx = headers.findIndex(h => h.includes('p75'));
+            const p90Idx = headers.findIndex(h => h.includes('p90'));
+            const p95Idx = headers.findIndex(h => h.includes('p95'));
+
+            if (siteIdx === -1 || dateIdx === -1) {
+                throw new Error("Could not find 'SiteCode' or 'MonthDay' columns in your CSV.");
+            }
+
+            let statsMap = {};
+
+            for (let i = 1; i < lines.length; i++) {
+                const cols = lines[i].split(',').map(c => c.trim());
+                if (parseInt(cols[siteIdx], 10) === parseInt(SITE_CODE, 10)) {
+                    let mmdd = cols[dateIdx];
+                    statsMap[mmdd] = {
+                        p95: p95Idx !== -1 ? safeFloat(cols[p95Idx]) : null,
+                        p90: p90Idx !== -1 ? safeFloat(cols[p90Idx]) : null,
+                        p75: p75Idx !== -1 ? safeFloat(cols[p75Idx]) : null,
+                        p50: p50Idx !== -1 ? safeFloat(cols[p50Idx]) : null,
+                        p25: p25Idx !== -1 ? safeFloat(cols[p25Idx]) : null,
+                        p10: p10Idx !== -1 ? safeFloat(cols[p10Idx]) : null,
+                        p05: p05Idx !== -1 ? safeFloat(cols[p05Idx]) : null
+                    };
+                }
+            }
+
+            // --- 2. Process Live Daily Values (USGS) ---
+            let currentDataMap = {};
+            let fetchedSiteName = `USGS Site ${SITE_CODE}`;
+
+            if (dvJson.value && dvJson.value.timeSeries[0]) {
+                fetchedSiteName = dvJson.value.timeSeries[0].sourceInfo.siteName;
+                dvJson.value.timeSeries[0].values[0].value.forEach(v => {
+                    const dateParts = v.dateTime.split('T')[0].split('-');
+                    let parsed = parseFloat(v.value);
+                    currentDataMap[`${dateParts[1]}-${dateParts[2]}`] = (isNaN(parsed) || parsed <= 0) ? null : parsed;
+                });
+            }
+
+            // --- 3. Align to 365 days and Calculate Cumulatives ---
+            const labels = [];
+            const currentData = [], p95Data = [], p90Data = [], p75Data = [], p50Data = [], p25Data = [], p10Data = [], p05Data = [];
+
+            // Cumulative Arrays
+            const cumulCurrentData = [], cumulP75Data = [], cumulP25Data = [];
+            let cumulCurrent = 0, cumulP75 = 0, cumulP25 = 0;
+
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            let d = new Date(currentYear, 0, 1);
+
+            while (d.getFullYear() === currentYear) {
+                let mmStr = String(d.getMonth() + 1).padStart(2, '0');
+                let ddStr = String(d.getDate()).padStart(2, '0');
+                let mmdd = `${mmStr}-${ddStr}`;
+
+                labels.push(`${monthNames[d.getMonth()]} ${d.getDate()}`);
+
+                // Daily Stats logic
+                if (statsMap[mmdd]) {
+                    p95Data.push(statsMap[mmdd].p95); p90Data.push(statsMap[mmdd].p90); p75Data.push(statsMap[mmdd].p75);
+                    p50Data.push(statsMap[mmdd].p50); p25Data.push(statsMap[mmdd].p25); p10Data.push(statsMap[mmdd].p10);
+                    p05Data.push(statsMap[mmdd].p05);
+
+                    // Accumulate 25th and 75th percentiles for the shaded normal band
+                    // 1 cfs = 86,400 cubic feet per day
+                    if (statsMap[mmdd].p75) cumulP75 += (statsMap[mmdd].p75 * 86400);
+                    if (statsMap[mmdd].p25) cumulP25 += (statsMap[mmdd].p25 * 86400);
+
+                } else {
+                    p95Data.push(null); p90Data.push(null); p75Data.push(null); p50Data.push(null); p25Data.push(null); p10Data.push(null); p05Data.push(null);
                 }
 
-                let statsMap = {};
-                
-                for (let i = 1; i < lines.length; i++) {
-                    const cols = lines[i].split(',').map(c => c.trim());
-                    
-                    if (parseInt(cols[siteIdx], 10) === parseInt(SITE_CODE, 10)) {
-                        let mmdd = cols[dateIdx];
-                        statsMap[mmdd] = {
-                            p95: p95Idx !== -1 ? safeFloat(cols[p95Idx]) : null,
-                            p90: p90Idx !== -1 ? safeFloat(cols[p90Idx]) : null,
-                            p75: p75Idx !== -1 ? safeFloat(cols[p75Idx]) : null,
-                            p50: p50Idx !== -1 ? safeFloat(cols[p50Idx]) : null,
-                            p25: p25Idx !== -1 ? safeFloat(cols[p25Idx]) : null,
-                            p10: p10Idx !== -1 ? safeFloat(cols[p10Idx]) : null,
-                            p05: p05Idx !== -1 ? safeFloat(cols[p05Idx]) : null
-                        };
-                    }
+                cumulP75Data.push(cumulP75 > 0 ? cumulP75 : null);
+                cumulP25Data.push(cumulP25 > 0 ? cumulP25 : null);
+
+                // Daily Current logic
+                let currDaily = currentDataMap[mmdd];
+                currentData.push(currDaily !== undefined ? currDaily : null);
+
+                // Cumulative Current Logic
+                if (currDaily !== undefined && currDaily !== null) {
+                    cumulCurrent += (currDaily * 86400);
+                    cumulCurrentData.push(cumulCurrent);
+                } else {
+                    cumulCurrentData.push(null); // Leave blank if day hasn't happened yet
                 }
 
-                // --- 2. Process Live Daily Values (USGS) ---
-                let currentDataMap = {};
-                let fetchedSiteName = `USGS Site ${SITE_CODE}`; 
-                
-                if (dvJson.value && dvJson.value.timeSeries[0]) {
-                    fetchedSiteName = dvJson.value.timeSeries[0].sourceInfo.siteName;
-                    
-                    dvJson.value.timeSeries[0].values[0].value.forEach(v => {
-                        const dateParts = v.dateTime.split('T')[0].split('-');
-                        let parsed = parseFloat(v.value);
+                d.setDate(d.getDate() + 1);
+            }
 
-                        // If the value is missing (NaN) or 0/negative, set to null to skip plotting
-                        currentDataMap[`${dateParts[1]}-${dateParts[2]}`] = (isNaN(parsed) || parsed <= 0) ? null : parsed;
-                    });
-                }
+            // --- 4. Render Charts ---
+            document.getElementById('loading').style.display = 'none';
+            const canvasDaily = document.getElementById('usgsChart');
+            const canvasCumul = document.getElementById('usgsCumulativeChart');
 
-                // --- 3. Align to 365 days ---
-                const labels = [], currentData = [];
-                const p95Data = [], p90Data = [], p75Data = [], p50Data = [], p25Data = [], p10Data = [], p05Data = [];
-                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-                
-                let d = new Date(currentYear, 0, 1);
-                while (d.getFullYear() === currentYear) {
-                    let mmStr = String(d.getMonth() + 1).padStart(2, '0');
-                    let ddStr = String(d.getDate()).padStart(2, '0');
-                    let mmdd = `${mmStr}-${ddStr}`;
-                    
-                    labels.push(`${monthNames[d.getMonth()]} ${d.getDate()}`);
-                    
-                    if (statsMap[mmdd]) {
-                        p95Data.push(statsMap[mmdd].p95); p90Data.push(statsMap[mmdd].p90); p75Data.push(statsMap[mmdd].p75);
-                        p50Data.push(statsMap[mmdd].p50); p25Data.push(statsMap[mmdd].p25); p10Data.push(statsMap[mmdd].p10);
-                        p05Data.push(statsMap[mmdd].p05);
-                    } else {
-                        p95Data.push(null); p90Data.push(null); p75Data.push(null); p50Data.push(null); p25Data.push(null); p10Data.push(null); p05Data.push(null);
-                    }
-                    
-                    currentData.push(currentDataMap[mmdd] !== undefined ? currentDataMap[mmdd] : null);
-                    d.setDate(d.getDate() + 1);
-                }
+            canvasDaily.style.display = 'block';
+            canvasCumul.style.display = 'block';
 
-                document.getElementById('loading').style.display = 'none';
-                const canvas = document.getElementById('usgsChart');
-                canvas.style.display = 'block';
-
-                // --- 4. Render Chart ---
-                new Chart(canvas.getContext('2d'), {
-                    type: 'line',
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            { label: '95th Percentile Bound', data: p95Data, borderColor: 'transparent', fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 7 },
-                            { label: '90-95th Percentile (Much Above Normal)', data: p90Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 0, 255, 0.3)', fill: 0, pointRadius: 0, tension: 0.2, spanGaps: true, order: 6 },
-                            { label: '75-90th Percentile (Above Normal)', data: p75Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 255, 255, 0.4)', fill: 1, pointRadius: 0, tension: 0.2, spanGaps: true, order: 5 },
-                            { label: '25-75th Percentile (Normal)', data: p25Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 255, 0, 0.4)', fill: 2, pointRadius: 0, tension: 0.2, spanGaps: true, order: 4 },
-                            { label: '10-25th Percentile (Below Normal)', data: p10Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 165, 0, 0.4)', fill: 3, pointRadius: 0, tension: 0.2, spanGaps: true, order: 3 },
-                            { label: '5-10th Percentile (Much Below Normal)', data: p05Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 0, 0, 0.3)', fill: 4, pointRadius: 0, tension: 0.2, spanGaps: true, order: 2 },
-                            { label: 'Historical Median', data: p50Data, borderColor: 'rgba(100, 100, 100, 0.8)', borderDash: [5, 5], borderWidth: 2, fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 1 },
-                            { label: `Current Year (${currentYear})`, data: currentData, borderColor: 'rgba(0, 0, 0, 1)', borderWidth: 3, fill: false, pointRadius: 0, tension: 0.2, spanGaps: false, order: 0 }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        plugins: {
-                            title: { display: true, text: `${fetchedSiteName} - Historical Stats`, font: { size: 16 } },
-                            
-                            // LEGEND CONFIGURATION
-                            legend: {
-                                display: true,
-                                position: 'bottom', // Moves legend below the graph
-                                labels: {
-                                    // Hide the invisible boundaries from the legend
-                                    filter: function(item, chart) {
-                                        return !item.text.includes('Bound');
-                                    }
+            const commonOptions = {
+                responsive: true,
+                interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                scales: {
+                    x: {
+                        display: true,
+                        ticks: {
+                            autoSkip: false,
+                            maxRotation: 0,
+                            callback: function(value) {
+                                const label = this.getLabelForValue(value);
+                                if (label && label.endsWith(' 1') && !label.endsWith('11')) {
+                                    return label.split(' ')[0];
                                 }
-                            },
-
-                            tooltip: { mode: 'index', intersect: false, filter: function(t) { return !t.dataset.label.includes('Bound'); } }
-                        },
-                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
-                        scales: {
-                            y: { type: 'logarithmic', display: true, title: { display: true, text: 'Discharge (cfs) - Log Scale' } },
-                            x: { 
-                                display: true, 
-                                ticks: { 
-                                    autoSkip: false, 
-                                    maxRotation: 0, 
-                                    callback: function(value) {
-                                        const label = this.getLabelForValue(value);
-                                        if (label && label.endsWith(' 1') && !label.endsWith('11')) {
-                                            return label.split(' ')[0]; 
-                                        }
-                                        return null; 
-                                    }
-                                } 
+                                return null;
                             }
                         }
                     }
-                });
+                }
+            };
 
-            } catch (error) {
-                console.error(error);
-                document.getElementById('loading').innerText = 'Error loading data. Check console, site code, or GitHub Gist link.';
-            }
+            // 1st Chart: Daily Discharge
+            new Chart(canvasDaily.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: '95th Percentile Bound', data: p95Data, borderColor: 'transparent', fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 7 },
+                        { label: '90-95th Percentile (Much Above Normal)', data: p90Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 0, 255, 0.3)', fill: 0, pointRadius: 0, tension: 0.2, spanGaps: true, order: 6 },
+                        { label: '75-90th Percentile (Above Normal)', data: p75Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 255, 255, 0.4)', fill: 1, pointRadius: 0, tension: 0.2, spanGaps: true, order: 5 },
+                        { label: '25-75th Percentile (Normal)', data: p25Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 255, 0, 0.4)', fill: 2, pointRadius: 0, tension: 0.2, spanGaps: true, order: 4 },
+                        { label: '10-25th Percentile (Below Normal)', data: p10Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 165, 0, 0.4)', fill: 3, pointRadius: 0, tension: 0.2, spanGaps: true, order: 3 },
+                        { label: '5-10th Percentile (Much Below Normal)', data: p05Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 0, 0, 0.3)', fill: 4, pointRadius: 0, tension: 0.2, spanGaps: true, order: 2 },
+                        { label: 'Historical Median', data: p50Data, borderColor: 'rgba(100, 100, 100, 0.8)', borderDash: [5, 5], borderWidth: 2, fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 1 },
+                        { label: `Current Year (${currentYear})`, data: currentData, borderColor: 'rgba(0, 0, 0, 1)', borderWidth: 3, fill: false, pointRadius: 0, tension: 0.2, spanGaps: false, order: 0 }
+                    ]
+                },
+                options: {
+                    ...commonOptions,
+                    plugins: {
+                        title: { display: true, text: `${fetchedSiteName} - Daily Duration`, font: { size: 16 } },
+                        legend: { display: true, position: 'bottom', labels: { filter: (item) => !item.text.includes('Bound') } },
+                        tooltip: { mode: 'index', intersect: false, filter: (t) => !t.dataset.label.includes('Bound') }
+                    },
+                    scales: {
+                        ...commonOptions.scales,
+                        y: {
+                            type: 'logarithmic',
+                            display: true,
+                            title: { display: true, text: 'Discharge (cfs) - Log Scale' },
+                            ticks: { callback: formatYAxis }
+                        }
+                    }
+                }
+            });
+
+            // 2nd Chart: Cumulative Discharge
+            new Chart(canvasCumul.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        { label: '75th Percentile Bound', data: cumulP75Data, borderColor: 'transparent', fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 2 },
+                        { label: '25-75th Percentile (Estimated Normal)', data: cumulP25Data, borderColor: 'transparent', backgroundColor: 'rgba(0, 255, 0, 0.2)', fill: 0, pointRadius: 0, tension: 0.2, spanGaps: true, order: 1 },
+                        { label: `Cumulative Discharge (${currentYear})`, data: cumulCurrentData, borderColor: 'rgba(0, 0, 0, 1)', borderWidth: 3, fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 0 }
+                    ]
+                },
+                options: {
+                    ...commonOptions,
+                    plugins: {
+                        title: { display: true, text: `${fetchedSiteName} - Accumulated for ${currentYear}`, font: { size: 16 } },
+                        legend: { display: true, position: 'bottom', labels: { filter: (item) => !item.text.includes('Bound') } },
+                        tooltip: { mode: 'index', intersect: false, filter: (t) => !t.dataset.label.includes('Bound') }
+                    },
+                    scales: {
+                        ...commonOptions.scales,
+                        y: {
+                            type: 'logarithmic',
+                            display: true,
+                            title: { display: true, text: 'Cumulative Discharge (cubic feet)' },
+                            ticks: { callback: formatYAxis }
+                        }
+                    }
+                }
+            });
+
+          } catch (error) {
+              console.error(error);
+              document.getElementById('loading').innerText = 'Error loading data. Check console, site code, or GitHub Gist link.';
+          }
         }
 
-        buildUSGSChart();
+        buildUSGSCharts();
     </script>
 </body>
 </html>
