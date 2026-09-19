@@ -140,7 +140,10 @@
                     
                     dvJson.value.timeSeries[0].values[0].value.forEach(v => {
                         const dateParts = v.dateTime.split('T')[0].split('-');
-                        currentDataMap[`${dateParts[1]}-${dateParts[2]}`] = safeFloat(v.value);
+                        let parsed = parseFloat(v.value);
+
+                        // If the value is missing (NaN) or 0/negative, set to null to skip plotting
+                        currentDataMap[`${dateParts[1]}-${dateParts[2]}`] = (isNaN(parsed) || parsed <= 0) ? null : parsed;
                     });
                 }
 
@@ -186,7 +189,7 @@
                             { label: '10-25th Percentile (Below Normal)', data: p10Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 165, 0, 0.4)', fill: 3, pointRadius: 0, tension: 0.2, spanGaps: true, order: 3 },
                             { label: '5-10th Percentile (Much Below Normal)', data: p05Data, borderColor: 'transparent', backgroundColor: 'rgba(255, 0, 0, 0.3)', fill: 4, pointRadius: 0, tension: 0.2, spanGaps: true, order: 2 },
                             { label: 'Historical Median', data: p50Data, borderColor: 'rgba(100, 100, 100, 0.8)', borderDash: [5, 5], borderWidth: 2, fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 1 },
-                            { label: `Current Year (${currentYear})`, data: currentData, borderColor: 'rgba(0, 0, 0, 1)', borderWidth: 3, fill: false, pointRadius: 0, tension: 0.2, spanGaps: true, order: 0 }
+                            { label: `Current Year (${currentYear})`, data: currentData, borderColor: 'rgba(0, 0, 0, 1)', borderWidth: 3, fill: false, pointRadius: 0, tension: 0.2, spanGaps: false, order: 0 }
                         ]
                     },
                     options: {
