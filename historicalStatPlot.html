@@ -468,18 +468,19 @@ function renderCharts(yearType) {
                 y: {
                     type: 'logarithmic',
                     display: true,
-                    title: { display: true, text: 'Discharge (cfs)' },
-                    ticks: {
-                        // 2. SCIENTIFIC NOTATION (1e+7, 1e+8, 1e+9, etc.)
-                        callback: function(value) {
-                            const log10 = Math.log10(value);
-                            // Only display labels for powers of 10 to keep log scale ticks clean
-                            if (Math.abs(log10 - Math.round(log10)) < 1e-5) {
-                                return value.toExponential(0); // Renders as 1e+7, 1e+8, etc.
-                            }
-                            return null; // Hide minor tick labels
+                    title: { display: true, text: 'Cumulative Streamflow (millions of cubic feet)' },
+                         ticks: {
+                    callback: function(value) {
+                        const log10 = Math.log10(value);
+                        // Only display labels for powers of 10 to keep log scale ticks clean
+                        if (Math.abs(log10 - Math.round(log10)) < 1e-5) {
+                            // Divide by 1,000,000 to convert to millions
+                            const valueInMillions = value / 1000000;
+                            return valueInMillions;
                         }
+                        return null; // Hide minor tick labels
                     }
+                }
                 },
                 x: { display: true }
             }
