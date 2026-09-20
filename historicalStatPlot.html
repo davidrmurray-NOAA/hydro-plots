@@ -245,13 +245,13 @@ async function fetchAndProcessData() {
                         maxYear = Math.max(minYear, maxYear);
 
                         const totalYears = (maxYear - minYear) + 1;
-                        document.getElementById('stats-range').innerText = `Stats Period: ${minYear} - ${maxYear} (${totalYears} years)`;
+                        document.getElementById('stats-range').innerText = `Statistical Data Period: ${minYear} - ${maxYear} (${totalYears} years)`;
                     } else {
-                        document.getElementById('stats-range').innerText = `Stats Period: Unavailable`;
+                        document.getElementById('stats-range').innerText = `Statistical Data Period: Unavailable`;
                     }
                 }
             } else {
-                document.getElementById('stats-range').innerText = `Stats Period: Unavailable`;
+                document.getElementById('stats-range').innerText = `Statistical Data Period: Unavailable`;
             }
         }
 
@@ -410,7 +410,7 @@ function renderCharts(yearType) {
        options: {
             responsive: true,
             plugins: {
-                title: { display: true, text: `${fetchedSiteName} - Historical Stats`, font: { size: 16 } },
+                title: { display: true, text: `${fetchedSiteName} - Historical Daily Flow Percentiles`, font: { size: 16 } },
                 legend: {
                     display: true,
                     position: 'bottom',
