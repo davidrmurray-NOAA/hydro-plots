@@ -190,18 +190,35 @@ async function fetchAndProcessData() {
             fetch(statPeriodUrl)
         ]);
 
-        // --- 1. Get the Last-Modified Header for the CSV ---
-        const lastModHeader = sheetRes.headers.get('Last-Modified');
+       // --- 1. Get the Last-Modified Date via GitHub API ---
         let csvUpdateYear = currentViewYear; // Fallback to current year
 
-        if (lastModHeader) {
-            const modDate = new Date(lastModHeader);
-            csvUpdateYear = modDate.getFullYear();
-            document.getElementById('last-updated').innerText = `Statistics last Updated: ${modDate.toLocaleDateString()}`;
-        } else {
-            document.getElementById('last-updated').innerText = `Statistics last Updated: Date Unavailable`;
-        }
+        try {
+            // Query GitHub API for the latest commit affecting this specific file
+            const ghApiUrl = `https://api.github.com/repos/davidrmurray-noaa/hydro-plots/commits?path=stats/${fgroup}_stats.csv&page=1&per_page=1`;
+            const ghRes = await fetch(ghApiUrl);
+            const ghData = await ghRes.json();
 
+            if (ghData && ghData.length > 0 && ghData[0].commit) {
+                const modDate = new Date(ghData[0].commit.committer.date);
+                csvUpdateYear = modDate.getFullYear();
+                document.getElementById('last-updated').innerText = `Statistics last Updated: ${modDate.toLocaleDateString()}`;
+            } else {
+                throw new Error("No commit data found");
+            }
+        } catch (err) {
+            console.warn("Could not fetch commit date from GitHub API, falling back to HTTP header.", err);
+
+            // Fallback to the HTTP header in case of API rate limits
+            const lastModHeader = sheetRes.headers.get('Last-Modified');
+            if (lastModHeader) {
+                const modDate = new Date(lastModHeader);
+                csvUpdateYear = modDate.getFullYear();
+                document.getElementById('last-updated').innerText = `Statistics last Updated: ${modDate.toLocaleDateString()}`;
+            } else {
+                document.getElementById('last-updated').innerText = `Statistics last Updated: Date Unavailable`;
+            }
+        }
         // --- 2. Calculate Period of Record (Min from USGS -> Max from CSV) ---
         if (statPeriodRes.ok) {
             const statText = await statPeriodRes.text();
@@ -468,18 +485,19 @@ function renderCharts(yearType) {
                 y: {
                     type: 'logarithmic',
                     display: true,
-                    title: { display: true, text: 'Discharge (cfs)' },
-                    ticks: {
-                        // 2. SCIENTIFIC NOTATION (1e+7, 1e+8, 1e+9, etc.)
-                        callback: function(value) {
-                            const log10 = Math.log10(value);
-                            // Only display labels for powers of 10 to keep log scale ticks clean
-                            if (Math.abs(log10 - Math.round(log10)) < 1e-5) {
-                                return value.toExponential(0); // Renders as 1e+7, 1e+8, etc.
-                            }
-                            return null; // Hide minor tick labels
+                    title: { display: true, text: 'Cumulative Streamflow (millions of cubic feet)' },
+                         ticks: {
+                    callback: function(value) {
+                        const log10 = Math.log10(value);
+                        // Only display labels for powers of 10 to keep log scale ticks clean
+                        if (Math.abs(log10 - Math.round(log10)) < 1e-5) {
+                            // Divide by 1,000,000 to convert to millions
+                            const valueInMillions = value / 1000000;
+                            return valueInMillions;
                         }
+                        return null; // Hide minor tick labels
                     }
+                }
                 },
                 x: { display: true }
             }
