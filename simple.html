@@ -1,31 +1,39 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>USGS River Discharge Dashboard</title>
+    <title>USGS & NWM River Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <style>
         body { 
-            font-family: Arial, sans-serif; 
-            padding: 10px; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            padding: 20px; 
             margin: 0;
+            background-color: #f4f4f9;
         }
         
-        /* The CSS Grid magic happens here */
+        #header {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
         #charts-wrapper {
             display: grid;
-            grid-template-columns: repeat(2, 1fr); /* Two equal columns */
-            gap: 20px; /* 30px space between the graphs */
+            grid-template-columns: repeat(2, 1fr); 
+            gap: 20px; 
         }
 
         .chart-container { 
             position: relative; 
-            height: 300px; 
+            height: 350px; 
             width: 100%; 
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
 
-        /* Responsive rule: On small screens (like phones), drop back to 1 column */
-        @media (max-width: 800px) {
+        @media (max-width: 900px) {
             #charts-wrapper {
                 grid-template-columns: 1fr;
             }
@@ -34,59 +42,65 @@
 </head>
 <body>
 
+    <div id="header">
+        <h2>USGS Observed + NWM Forecast Dashboard</h2>
+    </div>
+
     <div id="charts-wrapper"></div>
 
     <script>
-       // 1. DYNAMICALLY LOAD SITES FROM THE URL
+        // --- CONFIGURATION ---
+        const NOAAA_MAP_SERVICE = "https://noaa.gov";
+        const NWPS_API_BASE = "https://noaa.gov";
+
+        // 1. DYNAMICALLY LOAD SITES FROM URL
         const urlParams = new URLSearchParams(window.location.search);
         const sitesParam = urlParams.get('sites');
         
         let siteNumbers = [];
-        
-      if (sitesParam) {
-          siteNumbers = sitesParam.split(',');
-      } else {
-          document.getElementById('charts-wrapper').innerHTML = '<p>No sites provided</p>';
-      }
+        if (sitesParam) {
+            siteNumbers = sitesParam.split(',');
+        }
 
-       async function fetchAllSites() {
-          const wrapper = document.getElementById('charts-wrapper');
+        // --- MAIN ORCHESTRATOR ---
+        async function fetchAllSites() {
+            const wrapper = document.getElementById('charts-wrapper');
 
-          if (!sitesParam || siteNumbers.length === 0) {
-            wrapper.innerHTML = '<p>No sites provided</p>';
-            siteNumbers = ['01422747'] //default site for testing
-          }
+            if (!sitesParam || siteNumbers.length === 0) {
+                // Default sites for demo if none provided
+                // 01570500 = Susquehanna at Harrisburg (Good NWM data)
+                siteNumbers = ['01570500', '01422747']; 
+                if(!sitesParam) wrapper.innerHTML = '<p style="text-align:center">No sites provided in URL. Showing demo sites.</p>';
+            }
 
             for (const siteNo of siteNumbers) {
                 try {
+                    // --- A. FETCH USGS DATA (Existing Logic) ---
                     let isDischarge = true;
 
-                    // Helper function to check if the payload actually contains data points
+                    // Helper: Check for valid data points
                     const hasDataPoints = (apiData) => {
                         return apiData.value &&
                                apiData.value.timeSeries &&
                                apiData.value.timeSeries.length > 0 &&
                                apiData.value.timeSeries[0].values &&
-                               apiData.value.timeSeries[0].values.length > 0 &&
-                               apiData.value.timeSeries[0].values[0].value &&
-                               apiData.value.timeSeries[0].values[0].value.length > 0;
+                               apiData.value.timeSeries[0].values.length > 0;
                     };
 
-                    // 1. Fetch data using the reliable NWIS JSON API for Discharge (00060)
+                    // Try Discharge (00060)
                     let ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060`;
                     let response = await fetch(ivUrl);
                     let data = await response.json();
 
-                    // 2. Guard against missing discharge data points and fallback to Stage (00065)
+                    // Fallback to Stage (00065)
                     if (!hasDataPoints(data)) {
                         isDischarge = false;
                         ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00065`;
                         response = await fetch(ivUrl);
                         data = await response.json();
 
-                        // If stage is also missing data points, throw error
                         if (!hasDataPoints(data)) {
-                            throw new Error("Neither discharge nor stage data available for this site.");
+                            throw new Error("Neither discharge nor stage data available.");
                         }
                     }
 
@@ -94,112 +108,162 @@
                     const dynamicSiteName = timeSeriesData.sourceInfo.siteName;
                     const timeSeries = timeSeriesData.values[0].value;
 
-                    // 3. Parse the time series
-                    const continuousData = [];
+                    // Parse USGS Time Series
+                    const usgsPlotData = [];
                     for (let i = 0; i < timeSeries.length; i++) {
-                        const currentItem = timeSeries[i];
-                        const currentTime = new Date(currentItem.dateTime);
-                        const currentValue = parseFloat(currentItem.value);
+                        const item = timeSeries[i];
+                        const currentTime = new Date(item.dateTime);
+                        const val = parseFloat(item.value);
 
+                        // Handle gaps > 60 mins
                         if (i > 0) {
-                            const previousTime = new Date(timeSeries[i - 1].dateTime);
-                            const timeDiffMinutes = (currentTime - previousTime) / (1000 * 60);
-
-                            if (timeDiffMinutes > 60) {
-                                continuousData.push({ x: new Date(previousTime.getTime() + (1000 * 60)), y: null });
-                            }
+                            const prevTime = new Date(timeSeries[i - 1].dateTime);
+                            const diffMins = (currentTime - prevTime) / (1000 * 60);
+                            if (diffMins > 60) usgsPlotData.push({ x: new Date(prevTime.getTime() + 60000), y: null });
                         }
-                        continuousData.push({ x: currentTime, y: currentValue });
+                        usgsPlotData.push({ x: currentTime, y: val });
                     }
 
+                    // --- B. FETCH NWM FORECAST (New Logic) ---
+                    let nwmPlotData = [];
+                    
+                    // Only fetch NWM if we are plotting Discharge (cfs). 
+                    // NWM doesn't predict "Stage" (ft), so we skip it if isDischarge is false.
+                    if (isDischarge) {
+                        try {
+                            const reachId = await getReachIdFromUSGS(siteNo);
+                            if (reachId) {
+                                const forecast = await getForecastForReach(reachId);
+                                
+                                // We use the 'short_range' forecast (18 hours) for high resolution
+                                // You can switch this to 'medium_range' for 10 days
+                                if (forecast && forecast.short_range && forecast.short_range.series) {
+                                    nwmPlotData = forecast.short_range.series.map(pt => ({
+                                        x: new Date(pt.validTime),
+                                        y: pt.flow
+                                    }));
+                                }
+                            }
+                        } catch (nwmError) {
+                            console.warn(`NWM Fetch failed for ${siteNo} (continuing with USGS only):`, nwmError);
+                        }
+                    }
+
+                    // --- C. RENDER ---
                     const chartDiv = document.createElement('div');
                     chartDiv.className = 'chart-container';
                     const canvas = document.createElement('canvas');
                     chartDiv.appendChild(canvas);
                     wrapper.appendChild(chartDiv);
 
-                    renderChart(canvas, continuousData, dynamicSiteName, siteNo, isDischarge);
+                    renderChart(canvas, usgsPlotData, nwmPlotData, dynamicSiteName, siteNo, isDischarge);
 
                 } catch (error) {
-                    console.error("Error fetching USGS data for site " + siteNo + ":", error);
-                    const errorMsg = document.createElement('p');
-                    errorMsg.style.color = 'red';
-                    errorMsg.textContent = "Error loading river data for site " + siteNo + " - Details: " + error.message;
-                    wrapper.appendChild(errorMsg);
+                    console.error("Error processing site " + siteNo, error);
+                    const errDiv = document.createElement('div');
+                    errDiv.innerHTML = `<p style="color:red; font-weight:bold;">Error loading ${siteNo}: ${error.message}</p>`;
+                    wrapper.appendChild(errDiv);
                 }
             }
         }
 
-        function renderChart(canvasElement, continuousData, dynamicSiteName, siteNo, isDischarge) {
-            const ctx = canvasElement.getContext('2d');
-
-            // Set dynamic properties based on the parameter fetched
-            const dataLabel = isDischarge ? 'Discharge' : 'Gage Height';
+        // --- CHART RENDERING ---
+        function renderChart(canvas, usgsData, nwmData, siteName, siteNo, isDischarge) {
+            const ctx = canvas.getContext('2d');
             const unit = isDischarge ? 'cfs' : 'ft';
-            const yAxisType = isDischarge ? 'logarithmic' : 'linear';
-            const yAxisTitle = isDischarge ? 'Discharge (ft³/s) [Log Scale]' : 'Gage Height (ft) [Linear Scale]';
-            const lineColor = isDischarge ? 'rgba(0, 51, 153, 1)' : 'rgba(0, 153, 102, 1)'; // Blue for discharge, Green for stage
+            const yAxisTitle = isDischarge ? 'Discharge (ft³/s)' : 'Gage Height (ft)';
+            
+            // Colors
+            const usgsColor = isDischarge ? 'rgba(0, 51, 153, 1)' : 'rgba(0, 153, 102, 1)';
+            const nwmColor = 'rgba(255, 102, 0, 1)'; // Orange for forecast
+
+            const datasets = [{
+                label: `Observed (${unit})`,
+                data: usgsData,
+                borderColor: usgsColor,
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.1,
+                fill: false
+            }];
+
+            // Add Forecast Dataset if available
+            if (nwmData && nwmData.length > 0) {
+                datasets.push({
+                    label: 'NWM Forecast (Short Range)',
+                    data: nwmData,
+                    borderColor: nwmColor,
+                    borderWidth: 2,
+                    borderDash: [5, 5], // Dashed line for future
+                    pointRadius: 0,
+                    tension: 0.2,
+                    fill: false
+                });
+            }
 
             new Chart(ctx, {
                 type: 'line',
-                data: {
-                    datasets: [{
-                        label: dataLabel,
-                        data: continuousData,
-                        borderColor: lineColor,
-                        borderWidth: 2,
-                        pointRadius: 0,
-                        tension: 0.1,
-                        fill: false,
-                        spanGaps: false
-                    }]
-                },
+                data: { datasets: datasets },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    // Makes the tooltip appear when hovering anywhere in the vertical column, not just exactly on the line
-                    interaction: {
-                        mode: 'index',
-                        intersect: false,
-                    },
+                    interaction: { mode: 'index', intersect: false },
                     scales: {
                         x: {
                             type: 'time',
                             time: {
                                 unit: 'day',
                                 displayFormats: { day: 'MMM d' },
-                                tooltipFormat: 'MMM d, yyyy h:mm a' // This handles the Time format in the tooltip title
+                                tooltipFormat: 'MMM d HH:mm'
                             },
-                            title: { display: true, text: 'Date' }
+                            title: { display: true, text: 'Date/Time' }
                         },
                         y: {
-                            type: yAxisType,
+                            type: isDischarge ? 'logarithmic' : 'linear',
                             title: { display: true, text: yAxisTitle }
                         }
                     },
                     plugins: {
-                        legend: { display: false, position: 'top' },
                         title: {
                             display: true,
-                            text: [
-                                dynamicSiteName,
-                                'USGS No: ' + siteNo + ` (${dataLabel})`
-                            ]
+                            text: [`${siteName}`, `USGS: ${siteNo}`],
+                            font: { size: 14 }
                         },
-                        // Custom Tooltip Configuration
-                        tooltip: {
-                            displayColors: false, // Hides the little color box in the tooltip
-                            callbacks: {
-                                label: function(context) {
-                                    // Formats the hover text dynamically based on the active metric
-                                    return `${dataLabel}: ${context.parsed.y} ${unit}`;
-                                }
-                            }
-                        }
+                        legend: { display: true, position: 'top' }
                     }
                 }
             });
         }
+
+        // --- NWM HELPER FUNCTIONS ---
+        
+        async function getReachIdFromUSGS(usgsId) {
+            const params = new URLSearchParams({
+                where: `site_no='${usgsId}'`,
+                outFields: 'feature_id', 
+                f: 'json',
+                returnGeometry: 'false'
+            });
+            
+            // Note: Layer 0 is "Gauge Locations"
+            const response = await fetch(`${NOAAA_MAP_SERVICE}?${params.toString()}`);
+            if (!response.ok) throw new Error("MapService Error");
+            
+            const data = await response.json();
+            if (data.features && data.features.length > 0) {
+                return data.features[0].attributes.feature_id;
+            }
+            return null;
+        }
+
+        async function getForecastForReach(reachId) {
+            // Note: This API returns 'flow' (typically in cfs/cms depending on config, usually cfs for NWM v3.0 public endpoints)
+            const response = await fetch(`${NWPS_API_BASE}/${reachId}/streamflow`);
+            if (!response.ok) throw new Error("NWPS API Error");
+            return await response.json();
+        }
+
+        // Start the engine
         fetchAllSites();
     </script>
 </body>
