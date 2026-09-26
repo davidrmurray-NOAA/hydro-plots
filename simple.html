@@ -210,7 +210,59 @@
             }
         });
 
+        // --- RATING CURVE HELPER ---
+        async function getRatingCurveInterpolator(siteId) {
+            const url = `https://waterdata.usgs.gov/nwisweb/get_ratings?site_no=${siteId}&file_type=exsa`;
+            try {
+                const response = await fetch(url);
+                const textData = await response.text();
+
+                const lines = textData.split('\n');
+                const ratingPoints = [];
+
+                for (const line of lines) {
+                    if (line.startsWith('#') || line.trim() === '') continue;
+
+                    const columns = line.split('\t');
+                    if (isNaN(parseFloat(columns[0]))) continue;
+
+                    const stage = parseFloat(columns[0]);
+                    const discharge = parseFloat(columns[2]);
+
+                    if (!isNaN(stage) && !isNaN(discharge)) {
+                        ratingPoints.push({ stage, discharge });
+                    }
+                }
+
+                ratingPoints.sort((a, b) => a.discharge - b.discharge);
+
+                return function(targetDischarge) {
+                    if (ratingPoints.length === 0) return null;
+                    if (targetDischarge <= ratingPoints[0].discharge) return ratingPoints[0].stage;
+                    if (targetDischarge >= ratingPoints[ratingPoints.length - 1].discharge) return ratingPoints[ratingPoints.length - 1].stage;
+
+                    for (let i = 0; i < ratingPoints.length - 1; i++) {
+                        const lower = ratingPoints[i];
+                        const upper = ratingPoints[i + 1];
+
+                        if (targetDischarge >= lower.discharge && targetDischarge <= upper.discharge) {
+                            const dischargeDiff = upper.discharge - lower.discharge;
+                            if (dischargeDiff === 0) return lower.stage;
+                            const ratio = (targetDischarge - lower.discharge) / dischargeDiff;
+                            return lower.stage + (ratio * (upper.stage - lower.stage));
+                        }
+                    }
+                    return null;
+                };
+            } catch (error) {
+                console.error(`Failed to fetch rating curve for site ${siteId}:`, error);
+                return null;
+            }
+        }
+
+
         // --- MAIN ORCHESTRATOR ---
+// --- MAIN ORCHESTRATOR ---
         async function fetchAllSites() {
             const wrapper = document.getElementById('charts-wrapper');
 
@@ -225,51 +277,53 @@
                 }
             }
 
-            // --- CHECK FOR SINGLE CHART LAYOUT ---
             if (siteNumbers.length === 1) {
                 wrapper.classList.add('single-chart');
             }
 
             for (const siteNo of siteNumbers) {
                 try {
+                    const interpolator = await getRatingCurveInterpolator(siteNo);
+
                     // --- A. FETCH USGS DATA ---
                     let isDischarge = true;
 
-                    const hasDataPoints = (apiData) => {
-                        return apiData.value &&
-                               apiData.value.timeSeries &&
-                               apiData.value.timeSeries.length > 0 &&
-                               apiData.value.timeSeries[0].values &&
-                               apiData.value.timeSeries[0].values.length > 0;
-                    };
-
-                    let ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060`;
+                    // Fetch both parameters
+                    let ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00060,00065`;
                     let response = await fetch(ivUrl);
+                    if (!response.ok) throw new Error(`USGS API returned status ${response.status}`);
                     let data = await response.json();
 
-                    if (!hasDataPoints(data)) {
-                        isDischarge = false;
-                        ivUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteNo}&period=P5D&parameterCd=00065`;
-                        response = await fetch(ivUrl);
-                        data = await response.json();
-
-                        if (!hasDataPoints(data)) {
-                            throw new Error("Neither discharge nor stage data available.");
-                        }
+                    if (!data.value || !data.value.timeSeries || data.value.timeSeries.length === 0) {
+                        throw new Error("No data returned from USGS.");
                     }
 
-                    const timeSeriesData = data.value.timeSeries[0];
-                    const dynamicSiteName = timeSeriesData.sourceInfo.siteName;
-                    const timeSeries = timeSeriesData.values[0].value;
+                    const timeSeriesArray = data.value.timeSeries;
+                    const dynamicSiteName = timeSeriesArray[0].sourceInfo.siteName;
+
+                    const dischargeSeries = timeSeriesArray.find(series => series.variable.variableCode[0].value === "00060");
+                    const stageSeries = timeSeriesArray.find(series => series.variable.variableCode[0].value === "00065");
+
+                    const dischargeValues = (dischargeSeries && dischargeSeries.values[0].value.length > 0) ? dischargeSeries.values[0].value : [];
+                    const stageValues = (stageSeries && stageSeries.values[0].value.length > 0) ? stageSeries.values[0].value : [];
+
+                    // Determine what to plot based on ACTUAL data presence
+                    isDischarge = dischargeValues.length > 0;
+
+                    if (!isDischarge && stageValues.length === 0) {
+                        throw new Error("Neither discharge nor stage data available.");
+                    }
 
                     const usgsPlotData = [];
-                    for (let i = 0; i < timeSeries.length; i++) {
-                        const item = timeSeries[i];
+                    const activeValues = isDischarge ? dischargeValues : stageValues;
+
+                    for (let i = 0; i < activeValues.length; i++) {
+                        const item = activeValues[i];
                         const currentTime = new Date(item.dateTime);
                         const val = parseFloat(item.value);
 
                         if (i > 0) {
-                            const prevTime = new Date(timeSeries[i - 1].dateTime);
+                            const prevTime = new Date(activeValues[i - 1].dateTime);
                             const diffMins = (currentTime - prevTime) / (1000 * 60);
                             if (diffMins > 60) usgsPlotData.push({ x: new Date(prevTime.getTime() + 60000), y: null });
                         }
@@ -281,6 +335,7 @@
                     let nwmPlotDataMedium = [];
                     let nwmErrorMsg = null;
 
+                    // ONLY fetch and plot NWM if we are plotting Discharge
                     if (isDischarge) {
                         try {
                             const reachId = await getReachIdFromUSGS(siteNo);
@@ -311,7 +366,7 @@
                                      nwmErrorMsg = "No forecast data returned from API.";
                                 }
                             } else {
-                                nwmErrorMsg = `No NWM reach mapping found in NWPS API for USGS ${siteNo}.`;
+                                nwmErrorMsg = `No NWM reach mapping found.`;
                             }
                         } catch (nwmError) {
                             console.warn(`NWM Fetch failed for ${siteNo}:`, nwmError);
@@ -322,7 +377,6 @@
                     // --- C. RENDER ---
                     const chartDiv = document.createElement('div');
                     chartDiv.className = 'chart-container';
-
                     const canvasWrapper = document.createElement('div');
                     canvasWrapper.className = 'canvas-wrapper';
                     const canvas = document.createElement('canvas');
@@ -338,7 +392,7 @@
 
                     wrapper.appendChild(chartDiv);
 
-                    renderChart(canvas, usgsPlotData, nwmPlotData, nwmPlotDataMedium, dynamicSiteName, siteNo, isDischarge);
+                    renderChart(canvas, usgsPlotData, nwmPlotData, nwmPlotDataMedium, dynamicSiteName, siteNo, isDischarge, interpolator);
 
                 } catch (error) {
                     console.error("Error processing site " + siteNo, error);
@@ -349,30 +403,32 @@
             }
         }
 
-        // --- CHART RENDERING ---
-        function renderChart(canvas, usgsData, nwmData, nwmDataMed, siteName, siteNo, isDischarge) {
-            const ctx = canvas.getContext('2d');
-            const unit = isDischarge ? 'cfs' : 'ft';
-            const yAxisTitle = isDischarge ? 'Discharge (ft³/s)' : 'Gage Height (ft)';
 
+// --- CHART RENDERING ---
+        function renderChart(canvas, usgsData, nwmData, nwmDataMed, siteName, siteNo, isDischarge, interpolator) {
+            const ctx = canvas.getContext('2d');
             const usgsColor = isDischarge ? 'rgba(0, 51, 153, 1)' : 'rgba(0, 153, 102, 1)';
             const nwmColor = 'rgba(255, 102, 0, 1)';
             const nwmColorMed = 'rgba(80, 10, 0, 1)';
 
-            const datasets = [{
-                label: `Observed (${unit})`,
-                data: usgsData,
-                borderColor: usgsColor,
-                borderWidth: 2,
-                pointRadius: 0,
-                tension: 0.0,
-                fill: false
-            }];
+            const datasets = [
+                {
+                    label: isDischarge ? `Observed Discharge` : `Observed Stage`,
+                    data: usgsData,
+                    yAxisID: 'y',
+                    borderColor: usgsColor,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.0,
+                    fill: false
+                }
+            ];
 
             if (nwmData && nwmData.length > 0) {
                 datasets.push({
                     label: 'NWM Forecast (Short Range)',
                     data: nwmData,
+                    yAxisID: 'y', // Plotted on primary axis
                     borderColor: nwmColor,
                     borderWidth: 2,
                     borderDash: [5, 5],
@@ -384,8 +440,9 @@
             }
             if (nwmDataMed && nwmDataMed.length > 0) {
                 datasets.push({
-                    label: 'NWM Forecast (Medium Range Mean)',
+                    label: 'NWM Forecast (Medium Range)',
                     data: nwmDataMed,
+                    yAxisID: 'y', // Plotted on primary axis
                     borderColor: nwmColorMed,
                     borderWidth: 2,
                     borderDash: [2, 2],
@@ -421,7 +478,33 @@
                         },
                         y: {
                             type: isDischarge ? 'logarithmic' : 'linear',
-                            title: { display: true, text: yAxisTitle }
+                            position: 'left',
+                            title: { display: true, text: isDischarge ? 'Discharge (cfs)' : 'Gage Height (ft)' }
+                        },
+                        y1: {
+                            display: isDischarge && interpolator !== null,
+                            type: 'logarithmic', // Must match 'y' exactly to perfectly sync grid lines
+                            position: 'right',
+                            title: { display: true, text: 'Gage Height (ft)' },
+                            grid: { drawOnChartArea: false },
+                            afterDataLimits: (scale) => {
+                                // Force this axis min/max to visually lock to the Discharge axis
+                                const yScale = scale.chart.scales.y;
+                                if (yScale) {
+                                    scale.min = yScale.min;
+                                    scale.max = yScale.max;
+                                }
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    // Translate the background Discharge grid value into a Stage label
+                                    if (interpolator) {
+                                        const stage = interpolator(value);
+                                        return stage !== null ? stage.toFixed(2) : '';
+                                    }
+                                    return value;
+                                }
+                            }
                         }
                     },
                     plugins: {
@@ -430,7 +513,28 @@
                             text: [`${siteName}`, `USGS: ${siteNo}`],
                             font: { size: 14 }
                         },
-                        legend: { display: false }
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) {
+                                        // Show base unit
+                                        label += context.parsed.y.toFixed(isDischarge ? 0 : 2) + (isDischarge ? ' cfs' : ' ft');
+
+                                        // Append Stage translation if available
+                                        if (isDischarge && interpolator) {
+                                            const stage = interpolator(context.parsed.y);
+                                            if (stage !== null) {
+                                                label += ` (${stage.toFixed(2)} ft)`;
+                                            }
+                                        }
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
                     }
                 }
             });
